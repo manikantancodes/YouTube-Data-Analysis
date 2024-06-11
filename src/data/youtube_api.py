@@ -1,136 +1,183 @@
 # src/data/youtube_api.py
-
+import os
+import streamlit as st
 from googleapiclient.discovery import build
-import psycopg2
-import pandas as pd
 
-def api_connect(api_key):
-    """Connect to the YouTube API using the provided API key."""
+# Function to connect to the YouTube API
+def api_connect():
+    """
+    Connects to the YouTube API using the API key from environment variables.
+    
+    Returns:
+        youtube: The YouTube API client object.
+    """
+    api_id = os.getenv("YOUTUBE_API_KEY")
+    if not api_id:
+        st.error("YouTube API Key not found. Please set the environment variable YOUTUBE_API_KEY.")
+        return None
+    api_service_name = "youtube"
+    api_version = "v3"
+    youtube = build(api_service_name, api_version, developerKey=api_id)
+    return youtube
+
+youtube = api_connect()
+
+# Function to get channel information
+def get_channel_info(channel_id):
+    """
+    Retrieves channel details such as name, ID, subscribers, views, total videos, description, and playlist ID.
+    
+    Args:
+        channel_id (str): The ID of the YouTube channel.
+    
+    Returns:
+        dict: A dictionary containing channel details.
+    """
     try:
-        youtube = build("youtube", "v3", developerKey=api_key)
-        return youtube
+        request = youtube.channels().list(part="snippet,contentDetails,statistics", id=channel_id)
+        response = request.execute()
+        for item in response['items']:
+            data = {
+                "channel_name": item["snippet"]["title"],
+                "channel_id": item["id"],
+                "subscribers": int(item['statistics']['subscriberCount']),
+                "views": int(item["statistics"]["viewCount"]),
+                "total_videos": int(item["statistics"]["videoCount"]),
+                "channel_description": item["snippet"]["description"],
+                "playlist_id": item["contentDetails"]["relatedPlaylists"]["uploads"]
+            }
+        return data
     except Exception as e:
-        print("Error connecting to the YouTube API:", e)
+        st.error(f"Error fetching channel info: {e}")
         return None
 
-def get_channel_info(youtube, channel_id):
-    """Retrieve information about a YouTube channel."""
-    try:
-        request = youtube.channels().list(
-            part="snippet, contentDetails, statistics",
-            id=channel_id
-        )
-        response = request.execute()
-        return response.get('items', [])
-    except Exception as e:
-        print("Error retrieving channel information:", e)
-        return []
-
-def get_playlist_details(youtube, channel_id):
-    """Retrieve details of playlists associated with a YouTube channel."""
-    try:
-        next_page_token = None
-        all_playlists = []
-        while True:
-            request = youtube.playlists().list(
-                part='snippet, contentDetails',
-                channelId=channel_id,
-                maxResults=50,
-                pageToken=next_page_token
-            )
-            response = request.execute()
-
-            all_playlists.extend(response.get('items', []))
-            next_page_token = response.get('nextPageToken')
-            if not next_page_token:
-                break
-        return all_playlists
-    except Exception as e:
-        print("Error retrieving playlist details:", e)
-        return []
-
-def get_videos_ids(youtube, channel_id):
-    """Retrieve video IDs of videos uploaded to a channel."""
+# Function to get video IDs
+def get_videos_ids(channel_id):
+    """
+    Retrieves video IDs from the channel's uploads playlist.
+    
+    Args:
+        channel_id (str): The ID of the YouTube channel.
+    
+    Returns:
+        list: A list of video IDs.
+    """
     video_ids = []
     try:
         response = youtube.channels().list(id=channel_id, part='contentDetails').execute()
         playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
-        
+
         next_page_token = None
         while True:
-            request = youtube.playlistItems().list(
-                part='snippet',
-                playlistId=playlist_id,
-                maxResults=50,
-                pageToken=next_page_token
-            )
-            response = request.execute()
-            for item in response['items']:
+            response1 = youtube.playlistItems().list(part='snippet', playlistId=playlist_id, maxResults=50, pageToken=next_page_token).execute()
+            for item in response1['items']:
                 video_ids.append(item['snippet']['resourceId']['videoId'])
-            next_page_token = response.get('nextPageToken')
-            if not next_page_token:
+            next_page_token = response1.get('nextPageToken')
+            if next_page_token is None:
                 break
     except Exception as e:
-        print("Error retrieving video IDs:", e)
+        st.error(f"Error fetching video IDs: {e}")
     return video_ids
 
-def get_video_info(youtube, video_ids):
-    """Retrieve information about videos."""
+# Function to get video information
+def get_video_info(video_ids):
+    """
+    Retrieves detailed information for each video, including title, tags, description, publish date, duration, views, likes, comments, etc.
+    
+    Args:
+        video_ids (list): A list of video IDs.
+    
+    Returns:
+        list: A list of dictionaries containing video details.
+    """
     video_data = []
-    try:
-        for video_id in video_ids:
-            request = youtube.videos().list(
-                part="snippet, contentDetails, statistics",
-                id=video_id
-            )
+    for video_id in video_ids:
+        try:
+            request = youtube.videos().list(part="snippet,contentDetails,statistics", id=video_id)
             response = request.execute()
-
             for item in response["items"]:
                 data = {
-                    'Channel_Name': item['snippet']['channelTitle'],
-                    'Channel_Id': item['snippet']['channelId'],
-                    'Video_Id': item['id'],
-                    'Title': item['snippet']['title'],
-                    'Tags': item['snippet'].get('tags'),
-                    'Thumbnail': item['snippet']['thumbnails']['default']['url'],
-                    'Description': item['snippet'].get('description'),
-                    'Published_Date': item['snippet']['publishedAt'],
-                    'Duration': item['contentDetails']['duration'],
-                    'Views': item['statistics'].get('viewCount'),
-                    'Likes': item['statistics'].get('likeCount'),
-                    'Comments': item['statistics'].get('commentCount'),
-                    'Favorite_Count': item['statistics']['favoriteCount'],
-                    'Definition': item['contentDetails']['definition'],
-                    'Caption_Status': item['contentDetails']['caption']
+                    "channel_name": item['snippet']['channelTitle'],
+                    "channel_id": item['snippet']['channelId'],
+                    "video_id": item['id'],
+                    "title": item['snippet']['title'],
+                    "tags": item['snippet'].get('tags'),
+                    "thumbnail": item['snippet']['thumbnails']['default']['url'],
+                    "description": item['snippet'].get('description'),
+                    "published_date": item['snippet']['publishedAt'],
+                    "duration": item['contentDetails']['duration'],
+                    "views": int(item['statistics'].get('viewCount', 0)),
+                    "likes": int(item['statistics'].get('likeCount', 0)),
+                    "comments": int(item['statistics'].get('commentCount', 0)),
+                    "favorite_count": int(item['statistics']['favoriteCount']),
+                    "definition": item['contentDetails']['definition'],
+                    "caption_status": item['contentDetails']['caption']
                 }
                 video_data.append(data)
-    except Exception as e:
-        print("Error retrieving video information:", e)
+        except Exception as e:
+            st.error(f"Error fetching video info: {e}")
     return video_data
 
-def get_comment_info(youtube, video_ids):
-    """Retrieve information about comments on videos."""
+# Function to get comment information
+def get_comment_info(video_ids):
+    """
+    Retrieves comment details for each video, including comment text, author, and publish date.
+    
+    Args:
+        video_ids (list): A list of video IDs.
+    
+    Returns:
+        list: A list of dictionaries containing comment details.
+    """
     comment_data = []
-    try:
-        for video_id in video_ids:
-            request = youtube.commentThreads().list(
-                part="snippet",
-                videoId=video_id,
-                maxResults=50
-            )
+    for video_id in video_ids:
+        try:
+            request = youtube.commentThreads().list(part="snippet", videoId=video_id, maxResults=50)
             response = request.execute()
-
             for item in response['items']:
                 data = {
-                    'Comment_Id': item['snippet']['topLevelComment']['id'],
-                    'Video_Id': item['snippet']['topLevelComment']['snippet']['videoId'],
-                    'Comment_Text': item['snippet']['topLevelComment']['snippet']['textDisplay'],
-                    'Comment_Author': item['snippet']['topLevelComment']['snippet']['authorDisplayName'],
-                    'Comment_Published': item['snippet']['topLevelComment']['snippet']['publishedAt']
+                    "comment_id": item['snippet']['topLevelComment']['id'],
+                    "video_id": item['snippet']['topLevelComment']['snippet']['videoId'],
+                    "comment_text": item['snippet']['topLevelComment']['snippet']['textDisplay'],
+                    "comment_author": item['snippet']['topLevelComment']['snippet']['authorDisplayName'],
+                    "comment_published": item['snippet']['topLevelComment']['snippet']['publishedAt']
                 }
                 comment_data.append(data)
-    except Exception as e:
-        print("Error retrieving comment information:", e)
+        except Exception as e:
+            st.error(f"Error fetching comment info: {e}")
     return comment_data
 
-# Additional functions for interacting with the YouTube API can be added as needed
+# Function to get playlist details
+def get_playlist_details(channel_id):
+    """
+    Retrieves details for each playlist, including title, channel ID, channel name, publish date, and video count.
+    
+    Args:
+        channel_id (str): The ID of the YouTube channel.
+    
+    Returns:
+        list: A list of dictionaries containing playlist details.
+    """
+    all_data = []
+    next_page_token = None
+    try:
+        while True:
+            request = youtube.playlists().list(part='snippet,contentDetails', channelId=channel_id, maxResults=50, pageToken=next_page_token)
+            response = request.execute()
+            for item in response['items']:
+                data = {
+                    "playlist_id": item['id'],
+                    "title": item['snippet']['title'],
+                    "channel_id": item['snippet']['channelId'],
+                    "channel_name": item['snippet']['channelTitle'],
+                    "published_at": item['snippet']['publishedAt'],
+                    "video_count": item['contentDetails']['itemCount']
+                }
+                all_data.append(data)
+            next_page_token = response.get('nextPageToken')
+            if next_page_token is None:
+                break
+    except Exception as e:
+        st.error(f"Error fetching playlist details: {e}")
+    return all_data
+
